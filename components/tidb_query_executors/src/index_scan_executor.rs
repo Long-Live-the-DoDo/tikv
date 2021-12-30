@@ -126,6 +126,7 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
             is_key_only: false,
             accept_point_range: unique,
             is_scanned_range_aware,
+            need_mvcc: false,
         })?;
         Ok(Self(wrapper))
     }

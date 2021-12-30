@@ -38,6 +38,7 @@ pub trait Store: Send {
     fn scanner(
         &self,
         desc: bool,
+        need_mvcc: bool,
         key_only: bool,
         check_has_newer_ts_data: bool,
         lower_bound: Option<Key>,
@@ -353,6 +354,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
     fn scanner(
         &self,
         desc: bool,
+        need_mvcc: bool,
         key_only: bool,
         check_has_newer_ts_data: bool,
         lower_bound: Option<Key>,
@@ -362,6 +364,7 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         self.verify_range(&lower_bound, &upper_bound)?;
         let scanner = ScannerBuilder::new(self.snapshot.clone(), self.start_ts)
             .desc(desc)
+            .need_mvcc(need_mvcc)
             .range(lower_bound, upper_bound)
             .omit_value(key_only)
             .fill_cache(self.fill_cache)
@@ -548,6 +551,7 @@ impl Store for FixtureStore {
     fn scanner(
         &self,
         desc: bool,
+        _: bool,
         key_only: bool,
         _: bool,
         lower_bound: Option<Key>,

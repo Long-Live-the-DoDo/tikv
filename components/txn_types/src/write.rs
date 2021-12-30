@@ -1,6 +1,7 @@
 // Copyright 2016 TiKV Project Authors. Licensed under Apache-2.0.
 
 use codec::prelude::NumberDecoder;
+use std::fmt;
 use std::mem::size_of;
 use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
 
@@ -15,6 +16,12 @@ pub enum WriteType {
     Delete,
     Lock,
     Rollback,
+}
+
+impl fmt::Display for WriteType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 const FLAG_PUT: u8 = b'P';

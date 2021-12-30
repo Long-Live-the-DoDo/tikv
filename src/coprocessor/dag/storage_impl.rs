@@ -40,6 +40,7 @@ impl<S: Store> Storage for TiKVStorage<S> {
         &mut self,
         is_backward_scan: bool,
         is_key_only: bool,
+        need_mvcc: bool,
         range: IntervalRange,
     ) -> QEResult<()> {
         if let Some(scanner) = &mut self.scanner {
@@ -55,6 +56,7 @@ impl<S: Store> Storage for TiKVStorage<S> {
             self.store
                 .scanner(
                     is_backward_scan,
+                    need_mvcc,
                     is_key_only,
                     self.met_newer_ts_data_backlog == NewerTsCheckState::NotMetYet,
                     lower,

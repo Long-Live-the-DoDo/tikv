@@ -187,6 +187,7 @@ pub fn build_executors<S: Storage + 'static>(
                     descriptor.get_desc(),
                     is_scanned_range_aware,
                     primary_prefix_column_ids,
+                    descriptor.get_need_mvcc(),
                 )?
                 .collect_summary(summary_slot_index),
             );

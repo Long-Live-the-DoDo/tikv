@@ -5,6 +5,8 @@ use std::{borrow::Cow, cmp::Ordering};
 
 use engine_traits::CF_DEFAULT;
 use kvproto::kvrpcpb::{ExtraOp, IsolationLevel};
+use tidb_query_datatype::codec::datum::{COMPACT_BYTES_FLAG, VAR_INT_FLAG, VAR_UINT_FLAG};
+use tidb_query_datatype::codec::table::{EXTRA_MVCC_OP_COL_ID, EXTRA_MVCC_TS_COL_ID};
 use txn_types::{Key, Lock, LockType, OldValue, TimeStamp, Value, WriteRef, WriteType};
 
 use super::ScannerConfig;
@@ -12,7 +14,6 @@ use crate::storage::kv::SEEK_BOUND;
 use crate::storage::mvcc::{NewerTsCheckState, Result};
 use crate::storage::txn::{Result as TxnResult, TxnEntry, TxnEntryScanner};
 use crate::storage::{Cursor, Snapshot, Statistics};
-
 /// Defines the behavior of the scanner.
 pub trait ScanPolicy<S: Snapshot> {
     /// The type that the scanner outputs.
@@ -44,6 +45,7 @@ pub trait ScanPolicy<S: Snapshot> {
     fn handle_write(
         &mut self,
         current_user_key: Key,
+        commit_ts: TimeStamp,
         cfg: &mut ScannerConfig<S>,
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
@@ -199,7 +201,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
             //
             // `has_lock` indicates whether `current_user_key` has a corresponding `lock`. If
             // there is one, it is what current lock cursor pointing to.
-            let (mut current_user_key, has_write, has_lock) = {
+            let (mut current_user_key, has_write, has_lock, commit_ts) = {
                 let w_key = if self.cursors.write.valid()? {
                     Some(self.cursors.write.key(&mut self.statistics.write))
                 } else {
@@ -211,7 +213,8 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     None
                 };
 
-                // `res` is `(current_user_key_slice, has_write, has_lock)`
+                // `res` is `(current_user_key_slice, has_write, has_lock, commit_ts)`
+                // if is lock, commit_ts = 0
                 let res = match (w_key, l_key) {
                     (None, None) => {
                         // Both cursors yield `None`: we know that there is nothing remaining.
@@ -221,31 +224,37 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                         // Write cursor yields `None` but lock cursor yields something:
                         // In RC, it means we got nothing.
                         // In SI, we need to check if the lock will cause conflict.
-                        (k, false, true)
+                        (k, false, true, TimeStamp::new(0))
                     }
                     (Some(k), None) => {
                         // Write cursor yields something but lock cursor yields `None`:
                         // We need to further step write cursor to our desired version
-                        (Key::truncate_ts_for(k)?, true, false)
+                        (
+                            Key::truncate_ts_for(k)?,
+                            true,
+                            false,
+                            Key::decode_ts_from(k)?,
+                        )
                     }
                     (Some(wk), Some(lk)) => {
                         let write_user_key = Key::truncate_ts_for(wk)?;
+                        let commit_ts = Key::decode_ts_from(wk)?;
                         match write_user_key.cmp(lk) {
                             Ordering::Less => {
                                 // Write cursor user key < lock cursor, it means the lock of the
                                 // current key that write cursor is pointing to does not exist.
-                                (write_user_key, true, false)
+                                (write_user_key, true, false, commit_ts)
                             }
                             Ordering::Greater => {
                                 // Write cursor user key > lock cursor, it means we got a lock of a
                                 // key that does not have a write. In SI, we need to check if the
                                 // lock will cause conflict.
-                                (lk, false, true)
+                                (lk, false, true, TimeStamp::new(0))
                             }
                             Ordering::Equal => {
                                 // Write cursor user key == lock cursor, it means the lock of the
                                 // current key that write cursor is pointing to *exists*.
-                                (lk, true, true)
+                                (lk, true, true, commit_ts)
                             }
                         }
                     }
@@ -253,7 +262,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
 
                 // Use `from_encoded_slice` to reserve space for ts, so later we can append ts to
                 // the key or its clones without reallocation.
-                (Key::from_encoded_slice(res.0), res.1, res.2)
+                (Key::from_encoded_slice(res.0), res.1, res.2, res.3)
             };
 
             if has_lock {
@@ -279,6 +288,7 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                 if is_current_user_key {
                     if let HandleRes::Return(output) = self.scan_policy.handle_write(
                         current_user_key,
+                        commit_ts,
                         &mut self.cfg,
                         &mut self.cursors,
                         &mut self.statistics,
@@ -406,6 +416,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
     fn handle_write(
         &mut self,
         current_user_key: Key,
+        _: TimeStamp,
         cfg: &mut ScannerConfig<S>,
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
@@ -471,6 +482,171 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
     }
 }
 
+/// `ForwardScanner` with this policy outputs all the key value pairs
+/// with mvcc_ts and mvcc_op
+pub struct WithMvccInfoPolicy;
+
+impl<S: Snapshot> ScanPolicy<S> for WithMvccInfoPolicy {
+    type Output = (Key, Value);
+
+    // same with `LatestKvPolicy`
+    fn handle_lock(
+        &mut self,
+        current_user_key: Key,
+        cfg: &mut ScannerConfig<S>,
+        cursors: &mut Cursors<S>,
+        statistics: &mut Statistics,
+    ) -> Result<HandleRes<Self::Output>> {
+        if cfg.isolation_level == IsolationLevel::Rc {
+            cursors.lock.next(&mut statistics.lock);
+            return Ok(HandleRes::Skip(current_user_key));
+        }
+        // Only needs to check lock in SI
+        let lock = {
+            let lock_value = cursors.lock.value(&mut statistics.lock);
+            Lock::parse(lock_value)?
+        };
+        cursors.lock.next(&mut statistics.lock);
+        if let Err(e) = Lock::check_ts_conflict(
+            Cow::Borrowed(&lock),
+            &current_user_key,
+            cfg.ts,
+            &cfg.bypass_locks,
+        ) {
+            statistics.lock.processed_keys += 1;
+            // Skip current_user_key because this key is either blocked or handled.
+            cursors.move_write_cursor_to_next_user_key(&current_user_key, statistics)?;
+            if cfg.access_locks.contains(lock.ts) {
+                cursors.ensure_default_cursor(cfg)?;
+                // TODO: how to get commit_ts in this case?
+                return super::load_data_by_lock(
+                    &current_user_key,
+                    cfg,
+                    cursors.default.as_mut().unwrap(),
+                    lock,
+                    statistics,
+                )
+                .map(|val| match val {
+                    Some(v) => HandleRes::Return((current_user_key, v)),
+                    None => HandleRes::MoveToNext,
+                })
+                .map_err(Into::into);
+            }
+            return Err(e.into());
+        }
+        Ok(HandleRes::Skip(current_user_key))
+    }
+
+    fn handle_write(
+        &mut self,
+        current_user_key: Key,
+        commit_ts: TimeStamp,
+        cfg: &mut ScannerConfig<S>,
+        cursors: &mut Cursors<S>,
+        statistics: &mut Statistics,
+    ) -> Result<HandleRes<Self::Output>> {
+        let (value, write_type): (Option<Value>, WriteType) = loop {
+            let write = WriteRef::parse(cursors.write.value(&mut statistics.write))?;
+
+            let write_type = write.write_type;
+
+            if !write.check_gc_fence_as_latest_version(cfg.ts) {
+                break (None, write.write_type);
+            }
+
+            match write_type {
+                WriteType::Put => {
+                    if cfg.omit_value {
+                        break (Some(vec![]), write_type);
+                    }
+                    match write.short_value {
+                        Some(value) => {
+                            // Value is carried in `write`.
+                            break (Some(value.to_vec()), write_type);
+                        }
+                        None => {
+                            // Value is in the default CF.
+                            let start_ts = write.start_ts;
+                            cursors.ensure_default_cursor(cfg)?;
+                            let value = super::near_load_data_by_write(
+                                cursors.default.as_mut().unwrap(),
+                                &current_user_key,
+                                start_ts,
+                                statistics,
+                            )?;
+                            break (Some(value), write_type);
+                        }
+                    }
+                }
+                WriteType::Delete => break (None, write_type),
+                WriteType::Lock | WriteType::Rollback => {
+                    // Continue iterate next `write`.
+                }
+            }
+
+            cursors.write.next(&mut statistics.write);
+
+            if !cursors.write.valid()? {
+                // Key space ended. Needn't move write cursor to next key.
+                return Ok(HandleRes::Skip(current_user_key));
+            }
+            let current_key = cursors.write.key(&mut statistics.write);
+            if !Key::is_user_key_eq(current_key, current_user_key.as_encoded().as_slice()) {
+                // Meet another key. Needn't move write cursor to next key.
+                return Ok(HandleRes::Skip(current_user_key));
+            }
+        };
+        // do not move write cursor to next user key,
+        // but move to next key.
+        cursors.write.next(&mut statistics.write);
+        Ok(match value {
+            Some(mut v) => {
+                self.append_row_with_mvcc_info(&mut v, commit_ts, write_type)?;
+                HandleRes::Return((current_user_key, v))
+            }
+            _ => {
+                if write_type == WriteType::Delete {
+                    let mut v = vec![];
+                    self.append_row_with_mvcc_info(&mut v, commit_ts, write_type)?;
+                    HandleRes::Return((current_user_key, v))
+                } else {
+                    HandleRes::Skip(current_user_key)
+                }
+            }
+        })
+    }
+
+    fn output_size(&mut self, output: &Self::Output) -> usize {
+        output.0.len() + output.1.len()
+    }
+}
+
+impl WithMvccInfoPolicy {
+    fn append_row_with_mvcc_info(
+        &self,
+        value: &mut Value,
+        commit_ts: TimeStamp,
+        write_type: WriteType,
+    ) -> codec::Result<()> {
+        // append mvcc_ts_col_id
+        codec::number::NumberEncoder::write_u8(value, VAR_INT_FLAG)?;
+        codec::number::NumberEncoder::write_var_i64(value, EXTRA_MVCC_TS_COL_ID)?;
+        // append mvcc_ts
+        codec::number::NumberEncoder::write_u8(value, VAR_UINT_FLAG)?;
+        codec::number::NumberEncoder::write_var_u64(value, commit_ts.physical())?;
+        // append mvcc_op_col_id
+        codec::number::NumberEncoder::write_u8(value, VAR_INT_FLAG)?;
+        codec::number::NumberEncoder::write_var_i64(value, EXTRA_MVCC_OP_COL_ID)?;
+        // append mvcc_op
+        codec::number::NumberEncoder::write_u8(value, COMPACT_BYTES_FLAG)?;
+        codec::byte::CompactByteEncoder::write_compact_bytes(
+            value,
+            &write_type.to_string().as_bytes().to_vec(),
+        )?;
+        value.shrink_to_fit();
+        std::result::Result::Ok(())
+    }
+}
 /// The ScanPolicy for outputting `TxnEntry`.
 ///
 /// The `ForwardScanner` with this policy only outputs records whose commit_ts
@@ -506,6 +682,7 @@ impl<S: Snapshot> ScanPolicy<S> for LatestEntryPolicy {
     fn handle_write(
         &mut self,
         current_user_key: Key,
+        _: TimeStamp,
         cfg: &mut ScannerConfig<S>,
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
@@ -702,6 +879,7 @@ impl<S: Snapshot> ScanPolicy<S> for DeltaEntryPolicy {
     fn handle_write(
         &mut self,
         current_user_key: Key,
+        _: TimeStamp,
         cfg: &mut ScannerConfig<S>,
         cursors: &mut Cursors<S>,
         statistics: &mut Statistics,
@@ -807,6 +985,10 @@ pub type ForwardKvScanner<S> = ForwardScanner<S, LatestKvPolicy>;
 
 /// This scanner is like `ForwardKvScanner` but outputs `TxnEntry`.
 pub type EntryScanner<S> = ForwardScanner<S, LatestEntryPolicy>;
+
+/// this scanner is like `ForwardKvScanner`,
+/// but outputs all time KVs with mvcc info (commit_ts, op)
+pub type ForwardWithMvccInfoScanner<S> = ForwardScanner<S, WithMvccInfoPolicy>;
 
 /// This scanner scans all entries whose commit_ts (or locks' start_ts) is in range
 /// (from_ts, cfg.ts].

@@ -54,6 +54,7 @@ impl super::Storage for FixtureStorage {
         &mut self,
         is_backward_scan: bool,
         is_key_only: bool,
+        _: bool,
         range: IntervalRange,
     ) -> Result<()> {
         let data_view = self

@@ -12,7 +12,8 @@ use txn_types::{
 
 use self::backward::BackwardKvScanner;
 use self::forward::{
-    DeltaEntryPolicy, ForwardKvScanner, ForwardScanner, LatestEntryPolicy, LatestKvPolicy,
+    DeltaEntryPolicy, ForwardKvScanner, ForwardScanner, ForwardWithMvccInfoScanner,
+    LatestEntryPolicy, LatestKvPolicy, WithMvccInfoPolicy,
 };
 use crate::storage::kv::{
     CfStatistics, Cursor, CursorBuilder, Iterator, ScanMode, Snapshot, Statistics,
@@ -66,6 +67,15 @@ impl<S: Snapshot> ScannerBuilder<S> {
     #[inline]
     pub fn desc(mut self, desc: bool) -> Self {
         self.0.desc = desc;
+        self
+    }
+
+    /// Set the need_mvcc
+    ///
+    /// Default is 'false'.
+    #[inline]
+    pub fn need_mvcc(mut self, need: bool) -> Self {
+        self.0.need_mvcc = need;
         self
     }
 
@@ -142,6 +152,14 @@ impl<S: Snapshot> ScannerBuilder<S> {
                 lock_cursor,
                 write_cursor,
             )))
+        } else if self.0.need_mvcc {
+            Ok(Scanner::ForwardWithMvcc(ForwardScanner::new(
+                self.0,
+                lock_cursor,
+                write_cursor,
+                None,
+                WithMvccInfoPolicy,
+            )))
         } else {
             Ok(Scanner::Forward(ForwardScanner::new(
                 self.0,
@@ -197,6 +215,7 @@ impl<S: Snapshot> ScannerBuilder<S> {
 pub enum Scanner<S: Snapshot> {
     Forward(ForwardKvScanner<S>),
     Backward(BackwardKvScanner<S>),
+    ForwardWithMvcc(ForwardWithMvccInfoScanner<S>),
 }
 
 impl<S: Snapshot> StoreScanner for Scanner<S> {
@@ -204,6 +223,7 @@ impl<S: Snapshot> StoreScanner for Scanner<S> {
         match self {
             Scanner::Forward(scanner) => Ok(scanner.read_next()?),
             Scanner::Backward(scanner) => Ok(scanner.read_next()?),
+            Scanner::ForwardWithMvcc(scanner) => Ok(scanner.read_next()?),
         }
     }
 
@@ -212,6 +232,7 @@ impl<S: Snapshot> StoreScanner for Scanner<S> {
         match self {
             Scanner::Forward(scanner) => scanner.take_statistics(),
             Scanner::Backward(scanner) => scanner.take_statistics(),
+            Scanner::ForwardWithMvcc(scanner) => scanner.take_statistics(),
         }
     }
 
@@ -221,6 +242,7 @@ impl<S: Snapshot> StoreScanner for Scanner<S> {
         match self {
             Scanner::Forward(scanner) => scanner.met_newer_ts_data(),
             Scanner::Backward(scanner) => scanner.met_newer_ts_data(),
+            Scanner::ForwardWithMvcc(scanner) => scanner.met_newer_ts_data(),
         }
     }
 }
@@ -248,6 +270,9 @@ pub struct ScannerConfig<S: Snapshot> {
     access_locks: TsSet,
 
     check_has_newer_ts_data: bool,
+
+    // if need all mvcc info
+    need_mvcc: bool,
 }
 
 impl<S: Snapshot> ScannerConfig<S> {
@@ -266,6 +291,7 @@ impl<S: Snapshot> ScannerConfig<S> {
             bypass_locks: Default::default(),
             access_locks: Default::default(),
             check_has_newer_ts_data: false,
+            need_mvcc: false,
         }
     }
 

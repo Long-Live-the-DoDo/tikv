@@ -22,6 +22,7 @@ pub trait Storage: Send {
         &mut self,
         is_backward_scan: bool,
         is_key_only: bool,
+        need_mvcc: bool,
         range: IntervalRange,
     ) -> Result<()>;
 
@@ -43,9 +44,10 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
         &mut self,
         is_backward_scan: bool,
         is_key_only: bool,
+        need_mvcc: bool,
         range: IntervalRange,
     ) -> Result<()> {
-        (**self).begin_scan(is_backward_scan, is_key_only, range)
+        (**self).begin_scan(is_backward_scan, is_key_only, need_mvcc, range)
     }
 
     fn scan_next(&mut self) -> Result<Option<OwnedKvPair>> {

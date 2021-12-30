@@ -1057,8 +1057,14 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         false,
                     );
 
-                    let mut scanner =
-                        snap_store.scanner(reverse_scan, key_only, false, start_key, end_key)?;
+                    let mut scanner = snap_store.scanner(
+                        reverse_scan,
+                        false,
+                        key_only,
+                        false,
+                        start_key,
+                        end_key,
+                    )?;
                     let res = scanner.scan(limit, sample_step);
 
                     let statistics = scanner.take_statistics();

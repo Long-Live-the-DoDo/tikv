@@ -767,7 +767,7 @@ impl PdClient for RpcClient {
         self.pd_client.on_reconnect(Box::new(f))
     }
 
-    fn get_gc_safe_point(&self) -> PdFuture<u64> {
+    fn get_gc_safe_point(&self) -> PdFuture<(u64, Vec<u64>)> {
         let timer = Instant::now();
 
         let mut req = pdpb::GetGcSafePointRequest::default();
@@ -789,7 +789,7 @@ impl PdClient for RpcClient {
                     .with_label_values(&["get_gc_safe_point"])
                     .observe(duration_to_sec(timer.saturating_elapsed()));
                 check_resp_header(resp.get_header())?;
-                Ok(resp.get_safe_point())
+                Ok((resp.get_safe_point(), resp.get_save_points().to_vec()))
             }) as PdFuture<_>
         };
 

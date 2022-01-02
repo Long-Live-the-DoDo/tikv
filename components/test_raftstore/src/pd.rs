@@ -701,8 +701,8 @@ impl PdCluster {
         self.gc_safe_point = safe_point;
     }
 
-    fn get_gc_safe_point(&self) -> u64 {
-        self.gc_safe_point
+    fn get_gc_safe_point(&self) -> (u64, Vec<u64>) {
+        (self.gc_safe_point, vec![])
     }
 }
 
@@ -1544,13 +1544,13 @@ impl PdClient for TestPdClient {
         Box::pin(ok(()))
     }
 
-    fn get_gc_safe_point(&self) -> PdFuture<u64> {
+    fn get_gc_safe_point(&self) -> PdFuture<(u64, Vec<u64>)> {
         if let Err(e) = self.check_bootstrap() {
             return Box::pin(err(e));
         }
 
         let safe_point = self.cluster.rl().get_gc_safe_point();
-        Box::pin(ok(safe_point))
+        Box::pin(ok((safe_point, vec![])))
     }
 
     fn get_store_stats_async(&self, store_id: u64) -> BoxFuture<'_, Result<pdpb::StoreStats>> {

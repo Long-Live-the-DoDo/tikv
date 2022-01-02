@@ -57,13 +57,18 @@ const GC_MAX_PENDING_TASKS: usize = 4096;
 
 /// Provides safe point.
 pub trait GcSafePointProvider: Send + 'static {
-    fn get_safe_point(&self) -> Result<TimeStamp>;
+    fn get_safe_point(&self) -> Result<(TimeStamp, Vec<TimeStamp>)>;
 }
 
 impl<T: PdClient + 'static> GcSafePointProvider for Arc<T> {
-    fn get_safe_point(&self) -> Result<TimeStamp> {
+    fn get_safe_point(&self) -> Result<(TimeStamp, Vec<TimeStamp>)> {
         block_on(self.get_gc_safe_point())
-            .map(Into::into)
+            .map(|(safe_point, save_points)| {
+                (
+                    safe_point.into(),
+                    save_points.iter().map(|x| x.into()).collect(),
+                )
+            })
             .map_err(|e| box_err!("failed to get safe point from PD: {:?}", e))
     }
 }

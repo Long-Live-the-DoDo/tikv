@@ -245,7 +245,7 @@ pub trait PdClient: Send + Sync {
     {
     }
 
-    fn get_gc_safe_point(&self) -> PdFuture<u64> {
+    fn get_gc_safe_point(&self) -> PdFuture<(u64, Vec<u64>)> {
         unimplemented!();
     }
 

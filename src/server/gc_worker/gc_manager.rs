@@ -350,7 +350,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
     fn try_update_safe_point(&mut self) -> bool {
         self.safe_point_last_check_time = Instant::now();
 
-        let safe_point = match self.cfg.safe_point_provider.get_safe_point() {
+        let (safe_point, _) = match self.cfg.safe_point_provider.get_safe_point() {
             Ok(res) => res,
             // Return false directly so we will check it a while later.
             Err(e) => {

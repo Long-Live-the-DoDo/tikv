@@ -433,6 +433,9 @@ impl<S: Snapshot> ScanPolicy<S> for LatestKvPolicy {
                     if cfg.omit_value {
                         break Some(vec![]);
                     }
+                    if let Some(value) = write.long_value {
+                        break Some(value.to_vec());
+                    }
                     match write.short_value {
                         Some(value) => {
                             // Value is carried in `write`.
@@ -559,6 +562,9 @@ impl<S: Snapshot> ScanPolicy<S> for WithMvccInfoPolicy {
                     if cfg.omit_value {
                         break (Some(vec![]), write_type);
                     }
+                    if let Some(value) = write.long_value {
+                        break (Some(value.to_vec()), write_type);
+                    }
                     match write.short_value {
                         Some(value) => {
                             // Value is carried in `write`.
@@ -633,7 +639,7 @@ impl WithMvccInfoPolicy {
         codec::number::NumberEncoder::write_var_i64(value, EXTRA_MVCC_TS_COL_ID)?;
         // append mvcc_ts
         codec::number::NumberEncoder::write_u8(value, VAR_UINT_FLAG)?;
-        codec::number::NumberEncoder::write_var_u64(value, commit_ts.physical())?;
+        codec::number::NumberEncoder::write_var_u64(value, commit_ts.into_inner())?;
         // append mvcc_op_col_id
         codec::number::NumberEncoder::write_u8(value, VAR_INT_FLAG)?;
         codec::number::NumberEncoder::write_var_i64(value, EXTRA_MVCC_OP_COL_ID)?;

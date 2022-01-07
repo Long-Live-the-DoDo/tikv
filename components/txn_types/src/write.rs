@@ -7,7 +7,7 @@ use tikv_util::codec::number::{self, NumberEncoder, MAX_VAR_U64_LEN};
 
 use crate::lock::LockType;
 use crate::timestamp::TimeStamp;
-use crate::types::{Value, SHORT_VALUE_PREFIX};
+use crate::types::{Value, LONG_VALUE_PREFIX, SHORT_VALUE_PREFIX};
 use crate::{Error, ErrorInner, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -221,6 +221,7 @@ impl Write {
             write_type: self.write_type,
             start_ts: self.start_ts,
             short_value: self.short_value.as_deref(),
+            long_value: None,
             has_overlapped_rollback: self.has_overlapped_rollback,
             gc_fence: self.gc_fence,
         }
@@ -232,6 +233,7 @@ pub struct WriteRef<'a> {
     pub write_type: WriteType,
     pub start_ts: TimeStamp,
     pub short_value: Option<&'a [u8]>,
+    pub long_value: Option<&'a [u8]>,
     /// The `commit_ts` of transactions can be non-globally-unique. But since we store Rollback
     /// records in the same CF where Commit records is, and Rollback records are saved with
     /// `user_key{start_ts}` as the internal key, the collision between Commit and Rollback
@@ -261,6 +263,7 @@ impl WriteRef<'_> {
             .into();
 
         let mut short_value = None;
+        let mut long_value = None;
         let mut has_overlapped_rollback = false;
         let mut gc_fence = None;
 
@@ -283,6 +286,20 @@ impl WriteRef<'_> {
                     short_value = Some(&b[..len as usize]);
                     b = &b[len as usize..];
                 }
+                LONG_VALUE_PREFIX => {
+                    let len = b
+                        .read_u32()
+                        .map_err(|_| Error::from(ErrorInner::BadFormatWrite))?;
+                    if b.len() < len as usize {
+                        panic!(
+                            "content len [{}] shorter than short value len [{}]",
+                            b.len(),
+                            len,
+                        );
+                    }
+                    long_value = Some(&b[..len as usize]);
+                    b = &b[len as usize..];
+                }
                 FLAG_OVERLAPPED_ROLLBACK => {
                     has_overlapped_rollback = true;
                 }
@@ -299,6 +316,7 @@ impl WriteRef<'_> {
             write_type,
             start_ts,
             short_value,
+            long_value,
             has_overlapped_rollback,
             gc_fence,
         })

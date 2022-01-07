@@ -14,6 +14,7 @@ use tikv_util::codec::number::{self, NumberEncoder};
 // Short value max len must <= 255.
 pub const SHORT_VALUE_MAX_LEN: usize = 255;
 pub const SHORT_VALUE_PREFIX: u8 = b'v';
+pub const LONG_VALUE_PREFIX: u8 = b'V';
 
 pub fn is_short_value(value: &[u8]) -> bool {
     value.len() <= SHORT_VALUE_MAX_LEN

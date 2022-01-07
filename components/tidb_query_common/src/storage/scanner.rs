@@ -17,6 +17,7 @@ pub struct RangesScanner<T> {
     is_key_only: bool,
 
     need_mvcc: bool,
+    flashback_tss: Vec<(u64, u64)>,
 
     scanned_rows_per_range: Vec<usize>,
 
@@ -36,6 +37,7 @@ pub struct RangesScannerOptions<T> {
     pub is_key_only: bool,            // TODO: This can be const generics
     pub is_scanned_range_aware: bool, // TODO: This can be const generics
     pub need_mvcc: bool,
+    pub flashback_tss: Vec<(u64, u64)>,
 }
 
 impl<T: Storage> RangesScanner<T> {
@@ -47,6 +49,7 @@ impl<T: Storage> RangesScanner<T> {
             is_key_only,
             is_scanned_range_aware,
             need_mvcc,
+            flashback_tss,
         }: RangesScannerOptions<T>,
     ) -> RangesScanner<T> {
         let ranges_len = ranges.len();
@@ -57,6 +60,7 @@ impl<T: Storage> RangesScanner<T> {
             scan_backward_in_range,
             is_key_only,
             need_mvcc,
+            flashback_tss,
             scanned_rows_per_range: Vec::with_capacity(ranges_len),
             is_scanned_range_aware,
             current_range: IntervalRange {
@@ -93,6 +97,7 @@ impl<T: Storage> RangesScanner<T> {
                         self.is_key_only,
                         self.need_mvcc,
                         r,
+                        &self.flashback_tss,
                     )?;
                     self.storage.scan_next()?
                 }

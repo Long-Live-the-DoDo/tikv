@@ -56,6 +56,7 @@ impl super::Storage for FixtureStorage {
         is_key_only: bool,
         _: bool,
         range: IntervalRange,
+        _: &[(u64, u64)],
     ) -> Result<()> {
         let data_view = self
             .data

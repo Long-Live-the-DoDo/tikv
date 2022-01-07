@@ -79,6 +79,15 @@ impl<S: Snapshot> ScannerBuilder<S> {
         self
     }
 
+    /// Set the flashback_tss
+    ///
+    /// Default is 'false'.
+    #[inline]
+    pub fn flashback_tss(mut self, tss: &[(u64, u64)]) -> Self {
+        self.0.flashback_tss = tss.to_vec();
+        self
+    }
+
     /// Limit the range to `[lower_bound, upper_bound)` in which the `ForwardKvScanner` should scan.
     /// `None` means unbounded.
     ///
@@ -273,6 +282,7 @@ pub struct ScannerConfig<S: Snapshot> {
 
     // if need all mvcc info
     need_mvcc: bool,
+    flashback_tss: Vec<(u64, u64)>,
 }
 
 impl<S: Snapshot> ScannerConfig<S> {
@@ -292,6 +302,7 @@ impl<S: Snapshot> ScannerConfig<S> {
             access_locks: Default::default(),
             check_has_newer_ts_data: false,
             need_mvcc: false,
+            flashback_tss: vec![],
         }
     }
 

@@ -43,6 +43,7 @@ pub trait Store: Send {
         check_has_newer_ts_data: bool,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
+        flashback_tss: &[(u64, u64)],
     ) -> Result<Self::Scanner>;
 }
 
@@ -359,12 +360,14 @@ impl<S: Snapshot> Store for SnapshotStore<S> {
         check_has_newer_ts_data: bool,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
+        flashback_tss: &[(u64, u64)],
     ) -> Result<MvccScanner<S>> {
         // Check request bounds with physical bound
         self.verify_range(&lower_bound, &upper_bound)?;
         let scanner = ScannerBuilder::new(self.snapshot.clone(), self.start_ts)
             .desc(desc)
             .need_mvcc(need_mvcc)
+            .flashback_tss(flashback_tss)
             .range(lower_bound, upper_bound)
             .omit_value(key_only)
             .fill_cache(self.fill_cache)
@@ -556,6 +559,7 @@ impl Store for FixtureStore {
         _: bool,
         lower_bound: Option<Key>,
         upper_bound: Option<Key>,
+        _: &[(u64, u64)],
     ) -> Result<FixtureStoreScanner> {
         use std::ops::Bound;
 

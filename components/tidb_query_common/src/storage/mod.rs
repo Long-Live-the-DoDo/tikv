@@ -24,6 +24,7 @@ pub trait Storage: Send {
         is_key_only: bool,
         need_mvcc: bool,
         range: IntervalRange,
+        flashback_tss: &[(u64, u64)],
     ) -> Result<()>;
 
     fn scan_next(&mut self) -> Result<Option<OwnedKvPair>>;
@@ -46,8 +47,15 @@ impl<T: Storage + ?Sized> Storage for Box<T> {
         is_key_only: bool,
         need_mvcc: bool,
         range: IntervalRange,
+        flashback_tss: &[(u64, u64)],
     ) -> Result<()> {
-        (**self).begin_scan(is_backward_scan, is_key_only, need_mvcc, range)
+        (**self).begin_scan(
+            is_backward_scan,
+            is_key_only,
+            need_mvcc,
+            range,
+            flashback_tss,
+        )
     }
 
     fn scan_next(&mut self) -> Result<Option<OwnedKvPair>> {

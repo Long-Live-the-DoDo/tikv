@@ -709,7 +709,13 @@ pub fn sync_gc(
     save_points: Vec<TimeStamp>,
 ) -> Result<()> {
     wait_op!(|callback| schedule_gc(
-        scheduler, region_id, start_key, end_key, safe_point, save_points, callback
+        scheduler,
+        region_id,
+        start_key,
+        end_key,
+        safe_point,
+        save_points,
+        callback
     ))
     .unwrap_or_else(|| {
         error!("failed to receive result of gc");

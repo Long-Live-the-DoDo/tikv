@@ -43,6 +43,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
         is_scanned_range_aware: bool,
         primary_prefix_column_ids: Vec<i64>,
         need_mvcc: bool,
+        flashback_tss: Vec<(u64, u64)>,
     ) -> Result<Self> {
         let is_column_filled = vec![false; columns_info.len()];
         let mut is_key_only = true;
@@ -99,6 +100,7 @@ impl<S: Storage> BatchTableScanExecutor<S> {
             accept_point_range: no_common_handle,
             is_scanned_range_aware,
             need_mvcc,
+            flashback_tss,
         })?;
         Ok(Self(wrapper))
     }

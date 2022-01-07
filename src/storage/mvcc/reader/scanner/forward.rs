@@ -330,7 +330,12 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                     // Meet another key.
                     return Ok(false);
                 }
-                if Key::decode_ts_from(current_key)? <= self.cfg.ts {
+                let key_ts = Key::decode_ts_from(current_key)?;
+                if self.is_flashbacked(key_ts) {
+                    // Skip the key that is in the flashback range.
+                    continue;
+                }
+                if key_ts <= self.cfg.ts {
                     // Founded, don't need to seek again.
                     needs_seek = false;
                     break;
@@ -339,12 +344,13 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                 }
             }
         }
+        let mut cur_ts = self.cfg.ts;
         // If we have not found `${user_key}_${ts}` in a few `next()`, directly `seek()`.
-        if needs_seek {
+        while needs_seek {
             // `user_key` must have reserved space here, so its clone has reserved space too. So no
             // reallocation happens in `append_ts`.
             self.cursors.write.seek(
-                &user_key.clone().append_ts(self.cfg.ts),
+                &user_key.clone().append_ts(cur_ts),
                 &mut self.statistics.write,
             )?;
             if !self.cursors.write.valid()? {
@@ -356,8 +362,37 @@ impl<S: Snapshot, P: ScanPolicy<S>> ForwardScanner<S, P> {
                 // Meet another key.
                 return Ok(false);
             }
+            let key_ts = Key::decode_ts_from(current_key)?;
+            if !self.is_flashbacked(key_ts) {
+                break;
+            }
+            cur_ts = self.find_smallest_flashback_ts(key_ts);
         }
         Ok(true)
+    }
+
+    fn is_flashbacked(&self, key_ts: TimeStamp) -> bool {
+        for &(flashback_ts_start, flashback_ts_end) in &self.cfg.flashback_tss {
+            let start_timestamp = TimeStamp::new(flashback_ts_start);
+            let end_timestamp = TimeStamp::new(flashback_ts_end);
+            if start_timestamp <= key_ts && key_ts <= end_timestamp {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn find_smallest_flashback_ts(&self, key_ts: TimeStamp) -> TimeStamp {
+        let mut smallest_ts = key_ts;
+        for &(flashback_ts_start, flashback_ts_end) in &self.cfg.flashback_tss {
+            let start_timestamp = TimeStamp::new(flashback_ts_start);
+            let end_timestamp = TimeStamp::new(flashback_ts_end);
+            if start_timestamp <= key_ts && key_ts <= end_timestamp && start_timestamp < smallest_ts
+            {
+                smallest_ts = start_timestamp
+            }
+        }
+        smallest_ts
     }
 }
 

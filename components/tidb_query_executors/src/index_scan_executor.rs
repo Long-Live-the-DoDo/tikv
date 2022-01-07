@@ -126,7 +126,9 @@ impl<S: Storage> BatchIndexScanExecutor<S> {
             is_key_only: false,
             accept_point_range: unique,
             is_scanned_range_aware,
+            // TODO: support index scan for Flashback & MVCC Query
             need_mvcc: false,
+            flashback_tss: vec![],
         })?;
         Ok(Self(wrapper))
     }

@@ -57,6 +57,7 @@ pub struct ScanExecutorOptions<S, I> {
     pub accept_point_range: bool,
     pub is_scanned_range_aware: bool,
     pub need_mvcc: bool,
+    pub flashback_tss: Vec<(u64, u64)>,
 }
 
 impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
@@ -70,6 +71,7 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
             accept_point_range,
             is_scanned_range_aware,
             need_mvcc,
+            flashback_tss,
         }: ScanExecutorOptions<S, I>,
     ) -> Result<Self> {
         tidb_query_datatype::codec::table::check_table_ranges(&key_ranges)?;
@@ -88,6 +90,7 @@ impl<S: Storage, I: ScanExecutorImpl> ScanExecutor<S, I> {
                 is_key_only,
                 is_scanned_range_aware,
                 need_mvcc,
+                flashback_tss,
             }),
             is_ended: false,
         })

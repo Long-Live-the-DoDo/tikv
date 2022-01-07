@@ -5611,7 +5611,7 @@ dependencies = [
 [[package]]
 name = "tipb"
 version = "0.0.1"
-source = "git+https://github.com/Long-Live-the-DoDo/tipb.git#13de41190e3732d8435f9fb2f0f78a08fff2cb13"
+source = "git+https://github.com/Long-Live-the-DoDo/tipb.git#4ea84d01c119ab1fc70d598ef4c81cc72b383c93"
 dependencies = [
  "futures 0.3.15",
  "grpcio",

@@ -42,6 +42,7 @@ impl<S: Store> Storage for TiKVStorage<S> {
         is_key_only: bool,
         need_mvcc: bool,
         range: IntervalRange,
+        flashback_tss: &[(u64, u64)],
     ) -> QEResult<()> {
         if let Some(scanner) = &mut self.scanner {
             self.cf_stats_backlog.add(&scanner.take_statistics());
@@ -61,6 +62,7 @@ impl<S: Store> Storage for TiKVStorage<S> {
                     self.met_newer_ts_data_backlog == NewerTsCheckState::NotMetYet,
                     lower,
                     upper,
+                    flashback_tss,
                 )
                 .map_err(Error::from)?,
             // There is no transform from storage error to QE's StorageError,

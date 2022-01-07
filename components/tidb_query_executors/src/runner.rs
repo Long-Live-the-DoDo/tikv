@@ -177,6 +177,12 @@ pub fn build_executors<S: Storage + 'static>(
             let primary_column_ids = descriptor.take_primary_column_ids();
             let primary_prefix_column_ids = descriptor.take_primary_prefix_column_ids();
 
+            let flashback_tss: Vec<(u64, u64)> = descriptor
+                .get_flashback_timestamps()
+                .iter()
+                .map(|ts| (ts.get_start(), ts.get_end()))
+                .collect();
+
             executor = Box::new(
                 BatchTableScanExecutor::new(
                     storage,
@@ -188,6 +194,7 @@ pub fn build_executors<S: Storage + 'static>(
                     is_scanned_range_aware,
                     primary_prefix_column_ids,
                     descriptor.get_need_mvcc(),
+                    flashback_tss,
                 )?
                 .collect_summary(summary_slot_index),
             );

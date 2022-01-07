@@ -1064,6 +1064,7 @@ impl<E: Engine, L: LockManager> Storage<E, L> {
                         false,
                         start_key,
                         end_key,
+                        &[],
                     )?;
                     let res = scanner.scan(limit, sample_step);
 

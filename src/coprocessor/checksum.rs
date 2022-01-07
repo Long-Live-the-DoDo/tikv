@@ -49,6 +49,7 @@ impl<S: Snapshot> ChecksumContext<S> {
             is_key_only: false,
             is_scanned_range_aware: false,
             need_mvcc: false,
+            flashback_tss: vec![],
         });
         Ok(Self { req, scanner })
     }

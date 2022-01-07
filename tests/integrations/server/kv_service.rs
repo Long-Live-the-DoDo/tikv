@@ -541,7 +541,7 @@ fn test_mvcc_resolve_lock_gc_and_delete() {
     ts += 1;
     let gc_safe_ponit = TimeStamp::from(ts);
     let gc_scheduler = cluster.sim.rl().get_gc_worker(1).scheduler();
-    sync_gc(&gc_scheduler, 0, vec![], vec![], gc_safe_ponit).unwrap();
+    sync_gc(&gc_scheduler, 0, vec![], vec![], gc_safe_ponit, vec![]).unwrap();
 
     // the `k` at the old ts should be none.
     let get_version2 = commit_version + 1;

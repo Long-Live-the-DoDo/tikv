@@ -4,7 +4,7 @@ use engine_traits::KvEngine;
 use pd_client::FeatureGate;
 use std::cmp::Ordering;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, Builder as ThreadBuilder, JoinHandle};
 use std::time::Duration;
 use tikv_util::time::Instant;
@@ -225,6 +225,8 @@ pub(super) struct GcManager<S: GcSafePointProvider, R: RegionInfoProvider, E: Kv
     /// updated, `GCManager` will start to do GC on all regions.
     safe_point: Arc<AtomicU64>,
 
+    save_points: Arc<Mutex<Vec<TimeStamp>>>,
+
     safe_point_last_check_time: Instant,
 
     /// Used to schedule `GcTask`s.
@@ -245,9 +247,11 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         cfg_tracker: GcWorkerConfigManager,
         feature_gate: FeatureGate,
     ) -> GcManager<S, R, E> {
+        let save_points = Arc::new(Mutex::new(vec![]));
         GcManager {
             cfg,
             safe_point,
+            save_points,
             safe_point_last_check_time: Instant::now(),
             worker_scheduler,
             gc_manager_ctx: GcManagerContext::new(),
@@ -261,9 +265,15 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
         TimeStamp::new(ts)
     }
 
-    fn save_safe_point(&self, ts: TimeStamp) {
+    fn curr_save_points(&self) -> Vec<TimeStamp> {
+        self.save_points.lock().unwrap().clone()
+    }
+
+    fn save_safe_point(&self, ts: TimeStamp, save_points: Vec<TimeStamp>) {
         self.safe_point
             .store(ts.into_inner(), AtomicOrdering::Relaxed);
+        let mut s = self.save_points.lock().unwrap();
+        *s = save_points;
     }
 
     /// Starts working in another thread. This function moves the `GcManager` and returns a handler
@@ -328,7 +338,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
     /// updated to a greater value than initial value.
     fn initialize(&mut self) {
         debug!("gc-manager is initializing");
-        self.save_safe_point(TimeStamp::zero());
+        self.save_safe_point(TimeStamp::zero(), vec![]);
         self.try_update_safe_point();
         debug!("gc-manager started"; "safe_point" => self.curr_safe_point());
     }
@@ -350,7 +360,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
     fn try_update_safe_point(&mut self) -> bool {
         self.safe_point_last_check_time = Instant::now();
 
-        let (safe_point, _) = match self.cfg.safe_point_provider.get_safe_point() {
+        let (safe_point, save_points) = match self.cfg.safe_point_provider.get_safe_point() {
             Ok(res) => res,
             // Return false directly so we will check it a while later.
             Err(e) => {
@@ -371,7 +381,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
             Ordering::Equal => false,
             Ordering::Greater => {
                 debug!("gc_worker: update safe point"; "safe_point" => safe_point);
-                self.save_safe_point(safe_point);
+                self.save_safe_point(safe_point, save_points);
                 AUTO_GC_SAFE_POINT_GAUGE.set(safe_point.into_inner() as i64);
                 true
             }
@@ -545,6 +555,7 @@ impl<S: GcSafePointProvider, R: RegionInfoProvider + 'static, E: KvEngine> GcMan
             start,
             end,
             self.curr_safe_point(),
+            self.curr_save_points(),
         ) {
             // Ignore the error and continue, since it's useless to retry this.
             // TODO: Find a better way to handle errors. Maybe we should retry.

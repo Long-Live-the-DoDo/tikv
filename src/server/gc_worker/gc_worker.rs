@@ -82,6 +82,7 @@ where
         start_key: Vec<u8>,
         end_key: Vec<u8>,
         safe_point: TimeStamp,
+        save_points: Vec<TimeStamp>,
         callback: Callback<()>,
     },
     GcKeys {
@@ -683,6 +684,7 @@ fn schedule_gc(
     start_key: Vec<u8>,
     end_key: Vec<u8>,
     safe_point: TimeStamp,
+    save_points: Vec<TimeStamp>,
     callback: Callback<()>,
 ) -> Result<()> {
     scheduler
@@ -691,6 +693,7 @@ fn schedule_gc(
             start_key,
             end_key,
             safe_point,
+            save_points,
             callback,
         })
         .or_else(handle_gc_task_schedule_error)
@@ -703,9 +706,10 @@ pub fn sync_gc(
     start_key: Vec<u8>,
     end_key: Vec<u8>,
     safe_point: TimeStamp,
+    save_points: Vec<TimeStamp>,
 ) -> Result<()> {
     wait_op!(|callback| schedule_gc(
-        scheduler, region_id, start_key, end_key, safe_point, callback
+        scheduler, region_id, start_key, end_key, safe_point, save_points, callback
     ))
     .unwrap_or_else(|| {
         error!("failed to receive result of gc");
@@ -914,12 +918,14 @@ where
         self.check_is_busy(callback).map_or(Ok(()), |callback| {
             let start_key = vec![];
             let end_key = vec![];
+            let save_points = vec![];
             self.worker_scheduler
                 .schedule(GcTask::Gc {
                     region_id: 0,
                     start_key,
                     end_key,
                     safe_point,
+                    save_points,
                     callback,
                 })
                 .or_else(handle_gc_task_schedule_error)

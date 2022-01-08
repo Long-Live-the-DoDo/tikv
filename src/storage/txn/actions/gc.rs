@@ -8,10 +8,10 @@ pub fn gc<'a, S: Snapshot>(
     txn: &'a mut MvccTxn,
     reader: &'a mut MvccReader<S>,
     key: Key,
-    safe_point: TimeStamp,
+    save_points: Vec<TimeStamp>,
 ) -> MvccResult<GcInfo> {
     let gc = Gc::new(txn, reader, key);
-    let info = gc.run(safe_point)?;
+    let info = gc.run(save_points)?;
     info.report_metrics();
 
     Ok(info)
@@ -58,8 +58,8 @@ impl<'a, S: Snapshot> Gc<'a, S> {
         Ok(result)
     }
 
-    fn run(mut self, safe_point: TimeStamp) -> MvccResult<GcInfo> {
-        let mut state = State::Rewind(safe_point);
+    fn run(mut self, save_points: Vec<TimeStamp>) -> MvccResult<GcInfo> {
+        let mut state = State::Rewind(save_points);
 
         while let Some((commit, write)) = self.next_write()? {
             if self.txn.write_size >= MAX_TXN_WRITE_SIZE {
@@ -69,9 +69,13 @@ impl<'a, S: Snapshot> Gc<'a, S> {
             state.step(&mut self, write, commit);
         }
 
-        if let State::RemoveAll(Some((commit, write))) = state {
-            self.delete_write(write, commit);
-        }
+        match state {
+            State::RemoveIdempotent(_, Some((commit, write)))
+            | State::RemoveAll(_, Some((commit, write))) => {
+                self.delete_write(write, commit);
+            }
+            _ => {}
+        };
 
         self.info.is_completed = true;
         Ok(self.info)
@@ -80,38 +84,54 @@ impl<'a, S: Snapshot> Gc<'a, S> {
 
 enum State {
     // Rewind to TimeStamp.
-    Rewind(TimeStamp),
+    Rewind(Vec<TimeStamp>),
     // Remove locks and rollbacks until we get to a put or delete.
-    RemoveIdempotent,
+    RemoveIdempotent(Vec<TimeStamp>, Option<(TimeStamp, Write)>),
     // Parameter is the latest delete which can be removed if we complete removal of
     // everything else.
-    RemoveAll(Option<(TimeStamp, Write)>),
+    RemoveAll(Vec<TimeStamp>, Option<(TimeStamp, Write)>),
 }
 
 impl State {
     /// Process a single version of a key/value.
     fn step(&mut self, gc: &mut Gc<'_, impl Snapshot>, write: Write, commit_ts: TimeStamp) {
         match self {
-            State::Rewind(safe_point) => {
-                if commit_ts <= *safe_point {
-                    *self = State::RemoveIdempotent;
+            State::Rewind(save_points) => {
+                let last = save_points.last().unwrap();
+                if commit_ts <= *last {
+                    let mut sp = save_points.to_owned();
+                    sp.pop();
+                    *self = State::RemoveIdempotent(sp, None);
                     self.step(gc, write, commit_ts);
                 }
             }
-            State::RemoveIdempotent => match write.write_type {
-                WriteType::Put => {
-                    *self = State::RemoveAll(None);
+            State::RemoveIdempotent(save_points, last_delete) => match save_points.last() {
+                Some(last) if commit_ts <= *last => {
+                    let mut sp = save_points.to_owned();
+                    sp.pop();
+                    *self = State::RemoveIdempotent(sp, last_delete.clone());
+                    self.step(gc, write, commit_ts);
                 }
-                WriteType::Delete => {
-                    *self = State::RemoveAll(Some((commit_ts, write)));
-                }
-                WriteType::Rollback | WriteType::Lock => {
-                    gc.delete_write(write, commit_ts);
-                }
+                _ => match write.write_type {
+                    WriteType::Put => {
+                        *self = State::RemoveAll(save_points.to_owned(), None);
+                    }
+                    WriteType::Delete => {
+                        *self = State::RemoveAll(save_points.to_owned(), Some((commit_ts, write)));
+                    }
+                    WriteType::Rollback | WriteType::Lock => {
+                        gc.delete_write(write, commit_ts);
+                    }
+                },
             },
-            State::RemoveAll(_) => {
-                gc.delete_write(write, commit_ts);
-            }
+            State::RemoveAll(save_points, last_delete) => match save_points.last() {
+                Some(last) if commit_ts <= *last => {
+                    save_points.pop();
+                    *self = State::RemoveIdempotent(save_points.to_owned(), last_delete.clone());
+                    self.step(gc, write, commit_ts);
+                }
+                _ => gc.delete_write(write, commit_ts),
+            },
         }
     }
 }
@@ -139,7 +159,13 @@ pub mod tests {
         let cm = ConcurrencyManager::new(1.into());
         let mut txn = MvccTxn::new(TimeStamp::zero(), cm);
         let mut reader = MvccReader::new(snapshot, Some(ScanMode::Forward), true);
-        gc(&mut txn, &mut reader, Key::from_raw(key), safe_point.into()).unwrap();
+        gc(
+            &mut txn,
+            &mut reader,
+            Key::from_raw(key),
+            vec![safe_point.into()],
+        )
+        .unwrap();
         write(engine, &Context::default(), txn.into_modifies());
     }
 

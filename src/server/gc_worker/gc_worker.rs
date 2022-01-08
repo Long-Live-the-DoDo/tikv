@@ -241,13 +241,14 @@ where
     /// Cleans up outdated data.
     fn gc_key(
         &mut self,
-        safe_point: TimeStamp,
+        save_points: Vec<TimeStamp>,
         key: &Key,
         gc_info: &mut GcInfo,
         txn: &mut MvccTxn,
         reader: &mut MvccReader<E::Snap>,
     ) -> Result<()> {
-        let next_gc_info = gc(txn, reader, key.clone(), safe_point).map_err(TxnError::from_mvcc)?;
+        let next_gc_info =
+            gc(txn, reader, key.clone(), save_points).map_err(TxnError::from_mvcc)?;
         gc_info.found_versions += next_gc_info.found_versions;
         gc_info.deleted_versions += next_gc_info.deleted_versions;
         gc_info.is_completed = next_gc_info.is_completed;
@@ -272,8 +273,8 @@ where
         Ok(())
     }
 
-    fn gc(&mut self, start_key: &[u8], end_key: &[u8], safe_point: TimeStamp) -> Result<()> {
-        if !self.need_gc(start_key, end_key, safe_point) {
+    fn gc(&mut self, start_key: &[u8], end_key: &[u8], save_points: Vec<TimeStamp>) -> Result<()> {
+        if !self.need_gc(start_key, end_key, *save_points.last().unwrap()) {
             GC_SKIPPED_COUNTER.inc();
             return Ok(());
         }
@@ -296,15 +297,14 @@ where
                 GC_EMPTY_RANGE_COUNTER.inc();
                 break;
             }
-            self.gc_keys(keys, safe_point, None)?;
+            self.gc_keys(keys, save_points.clone(), None)?;
         }
 
         self.stats.add(&reader.statistics);
         debug!(
             "gc has finished";
             "start_key" => log_wrappers::Value::key(start_key),
-            "end_key" => log_wrappers::Value::key(end_key),
-            "safe_point" => safe_point
+            "end_key" => log_wrappers::Value::key(end_key)
         );
         Ok(())
     }
@@ -312,7 +312,7 @@ where
     fn gc_keys(
         &mut self,
         keys: Vec<Key>,
-        safe_point: TimeStamp,
+        save_points: Vec<TimeStamp>,
         regions_provider: Option<(u64, Arc<dyn RegionInfoProvider>)>,
     ) -> Result<()> {
         struct KeysInRegions<R: Iterator<Item = Region>> {
@@ -372,7 +372,13 @@ where
         let mut next_gc_key = keys.next();
         while let Some(ref key) = next_gc_key {
             GC_COMPACTION_FILTER_MVCC_DELETION_HANDLED.inc();
-            if let Err(e) = self.gc_key(safe_point, key, &mut gc_info, &mut txn, &mut reader) {
+            if let Err(e) = self.gc_key(
+                save_points.clone(),
+                key,
+                &mut gc_info,
+                &mut txn,
+                &mut reader,
+            ) {
                 error!(?e; "GC meets failure"; "key" => %key,);
                 // Switch to the next key if meets failure.
                 gc_info.is_completed = true;
@@ -581,10 +587,16 @@ where
                 start_key,
                 end_key,
                 safe_point,
+                save_points,
                 callback,
                 ..
             } => {
-                let res = self.gc(&start_key, &end_key, safe_point);
+                let mut save_points: Vec<TimeStamp> = save_points
+                    .into_iter()
+                    .filter(|x| *x < safe_point)
+                    .collect();
+                save_points.push(safe_point);
+                let res = self.gc(&start_key, &end_key, save_points);
                 update_metrics(res.is_err());
                 callback(res);
                 self.update_statistics_metrics();
@@ -603,7 +615,11 @@ where
                 region_info_provider,
             } => {
                 let old_seek_tombstone = self.stats.write.seek_tombstone;
-                let res = self.gc_keys(keys, safe_point, Some((store_id, region_info_provider)));
+                let res = self.gc_keys(
+                    keys,
+                    vec![safe_point],
+                    Some((store_id, region_info_provider)),
+                );
                 let new_seek_tombstone = self.stats.write.seek_tombstone;
                 let seek_tombstone = new_seek_tombstone - old_seek_tombstone;
                 slow_log!(T timer, "GC keys, seek_tombstone {}", seek_tombstone);

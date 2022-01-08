@@ -606,12 +606,9 @@ fn parse_write(value: &[u8]) -> Result<WriteRef<'_>, String> {
     }
 }
 
-pub fn is_compaction_filter_allowed(cfg_value: &GcConfig, feature_gate: &FeatureGate) -> bool {
-    do_check_allowed(
-        cfg_value.enable_compaction_filter,
-        cfg_value.compaction_filter_skip_version_check,
-        feature_gate,
-    )
+pub fn is_compaction_filter_allowed(_cfg_value: &GcConfig, _feature_gate: &FeatureGate) -> bool {
+    // disable compaction filter gc.
+   false
 }
 
 fn do_check_allowed(enable: bool, skip_vcheck: bool, feature_gate: &FeatureGate) -> bool {
